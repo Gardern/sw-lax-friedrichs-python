@@ -13,131 +13,216 @@ import pylab as pl
 ######################################################
 
 # Courant Friedrichs Levy condition (CFL) is a necessary condition for convergence
-CFL = #???# set so it fulfilles CFL condition, experiment with it
+CFL = 0.99 #???# set so it fulfilles CFL condition, experiment with it
 # gravitational constant
 g = 9.80665
 
 ## shallow water solver 1 dimension
 def shallowWater(n,XMAX,TMAX):
+	
+	TMAX *= XMAX
+	 
+	# dx = cell size
+	dx = 1.*XMAX/n
+	# x = cell center
+	x = np.arange(dx/2, XMAX, dx) #set to be cell centers
 
-    # dx = cell size
-    dx = 1.*XMAX/n
-    # x = cell center
-    x = #???# set to be cell centers
-    # initialize height h and momentum hu
-    h, hu = initialize(x,XMAX)
+	# initialize height h and momentum hu
+	h, hu = initialize(x,XMAX)
 
-    # add ghost cells
-    h = addGhostCells(h)
-    hu = addGhostCells(hu)
+	# add ghost cells
+	h = addGhostCells(h)
+	hu = addGhostCells(hu)
 
-    # plot initial conditions with interactive mode on
-    pl.ion()
-    plotVars(x,h,hu,0)
+	# plot initial conditions with interactive mode on
+	pl.ion()
+	#plotVars(x,h,hu,0)
+		
+	# time starts at zero
+	tsum=0.
+	saveToFile(h,tsum,n,'result.dat','wb')
+	saveToFile(hu,tsum,n,'result.dat','ab')
+	# loop over time
+	while tsum<TMAX:
 
-    # time starts at zero
-    tsum=0.
-    # loop over time
-    while tsum<TMAX:
+		# apply boundary conditions
+		h = neumannBoundaryConditions(h)
+		hu = neumannBoundaryConditions(hu)
+		#h = periodicBoundaryConditions(h)
+		#hu = periodicBoundaryConditions(hu)
 
-        # apply boundary conditions
-        h = neumannBoundaryConditions(h)
-        hu = neumannBoundaryConditions(hu)
-        #h = periodicBoundaryConditions(h)
-        #hu = periodicBoundaryConditions(hu)
+		# calculate fluxes at cell interfaces and largest eigenvalue
+		fhp, fhup, eigp = fluxes(h[1:],hu[1:]) #h[1:] = results in a list with all elements except element at index 0
+		fhm, fhum, eigm = fluxes(h[:-1],hu[:-1]) #h[:-1] = results in a list with all elements except element at the last index
+		maxeig = max(eigp, eigm) #???# maximum of eigp and eigm
 
-        # calculate fluxes at cell interfaces and largest eigenvalue
-        fhp, fhup, eigp = fluxes(h[1:],hu[1:])
-        fhm, fhum, eigm = fluxes(h[:-1],hu[:-1])
-        maxeig = #???# maximum of eigp and eigm
+		# calculate time step according to CFL-condition
+		dt = calculateDt(dx,maxeig,tsum,TMAX)
+		# advance time
+		tsum = tsum+dt
+		lambd = 1.*dt/dx
 
-        # calculate time step according to CFL-condition
-        dt = calculateDt(dx,maxeig,tsum,TMAX)
-        # advance time
-        tsum = tsum+dt
-        lambd = 1.*dt/dx
+		# R = Lax-Friedrichs Flux
+		Rh = LxFflux(h,fhp, fhm, lambd)
+		Rhu = LxFflux(hu, fhup, fhum, lambd)
 
-        # R = Lax-Friedrichs Flux
-        Rh = LxFflux(h,fhp, fhm, lambd)
-        Rhu = LxFflux(hu, fhup, fhum, lambd)
+		h[1:-1] -= lambd * (Rh[1:]-Rh[:-1])  #= h[1:-1] - Rh * lambd #and? #???# update cell average (tip: depends on Rh and lambda)
+		hu[1:-1] -= lambd * (Rhu[1:]-Rhu[:-1]) #= hu[1:-1] - Rhu * lambd #and? #???# update cell average (tip: depends on Rhu and lambda)
+		#plotVars(x,h,hu,tsum)
 
-        
-        h[1:-1] #???# update cell average (tip: depends on Rh and lambda)
-        hu[1:-1] #???# update cell average (tip: depends on Rhu and lambda)
-        plotVars(x,h,hu,tsum)
-
-    #end while (time loop)
+	#end while (time loop)
+	saveToFile(h,tsum,n,'result.dat','ab')
+	saveToFile(hu,tsum,n,'result.dat','ab')
+	
+	error('result.dat', 'result_n1000_TMAX045.dat')
 
 
-def plotVars(x,h,hu,time):
-    time = '{0:.5f}'.format(time)
-    pl.figure(1)
-    pl.clf()
-    pl.subplot(211)
-    pl.title('water height h(t='+time+')')
-    pl.plot(x,h[1:-1],label='u')
-    pl.xlabel('x')
-    pl.legend()
-    pl.subplot(212)
-    pl.title('momentum hu(t='+time+')')
-    pl.plot(x,hu[1:-1],label='hu')
-    pl.xlabel('x')
-    pl.legend()
-    pl.draw()
+def plotVars(x,h,hu,time,clear=True):
+	time = '{0:.5f}'.format(time)
+	pl.figure(1)
+	if clear:
+		pl.clf()
+	pl.subplot(211)
+	pl.title('water height h(t='+time+')')
+	pl.plot(x,h[1:-1],label='u')
+	pl.xlabel('x')
+	pl.legend()
+	pl.subplot(212)
+	pl.title('momentum hu(t='+time+')')
+	pl.plot(x,hu[1:-1],label='hu')
+	pl.xlabel('x')
+	pl.legend()
+	pl.draw()
+	
+def saveToFile(v,t,n,name,mode):
+	# mode 'w' (over)writes, 'a' appends
+	v = np.hstack([t,CFL,g,n+2,v]) # +2 because of ghost cells
+	ff = open(name, mode)
+	v.tofile(ff)
+	ff.close()
+
+def readFromFile(name,clear=True):
+	ff = open(name, 'rb')
+	data = np.fromfile(ff)
+	ff.close()
+	numberCells = data[3]
+	n = numberCells-2 # -2 because of ghost cells
+	numberParameters = 4 # t, CFL, g, n
+	numberVariables = 2 # h,hu
+	if data.size%(numberCells+numberParameters)*numberVariables==0:
+		numberSavedTimeSteps = data.size/((numberCells+numberParameters)*numberVariables)
+		data.shape = (numberVariables*numberSavedTimeSteps,(numberCells+numberParameters))
+		# plot the last time step
+		pl.ion()
+		#plotVars((1./2. + np.arange(n))/n, data[-2,numberParameters:], data[-1,numberParameters:], data[-1,0], clear)
+	else:
+		print 'data file inconsistent'
+	return data
+
+def error(name,nameReference):
+	data = readFromFile(name,True)
+	dataRef = readFromFile(nameReference,False)
+	numberParameters = 4 # t, CFL, g, n
+	h = data[-2,numberParameters+1:-1]
+	hu = data[-1,numberParameters+1:-1]
+	h_ref = dataRef[-2,numberParameters+1:-1]
+	hu_ref = dataRef[-1,numberParameters+1:-1]
+
+	numberCells = data[0,3]
+	if (numberCells != dataRef[0,3]):
+		print 'solution and reference solution have different number of grid cells'
+	else: 
+		n = numberCells-2 # -2 because of ghost cells
+		time = data[-1,0]
+		timeRef = dataRef[-1,0]
+		if time==timeRef: 
+			relErrorh = np.sum(np.abs(h-h_ref))/np.sum(np.abs(h_ref))
+			absErrorhu = np.sum(np.abs(h-h_ref))/(1.*n)
+			time = '{0:.5f}'.format(time)
+			relErrorh = '{0:.5f}'.format(relErrorh*100.)
+			absErrorhu = '{0:.5f}'.format(absErrorhu*100.)
+			print 'relative L1-error of water height h(t='+time+') is '+relErrorh+'%'
+			print 'absolute L1-error of momentum hu(t='+time+') is '+absErrorhu+'%'
+		else:
+			print 'cannot compare solution at different times'
 
 def initialize(x,XMAX):
-    # initialize water height with two peaks
-    c = 0.01
-    h = .5 + .5*np.exp(-(x-.6*XMAX)**2/(2*c**2))
-    h += np.exp(-(x-.4*XMAX)**2/(2*c**2))
-    # momentum is zero
-    hu = 0.*x
-    return h, hu
+	# initialize water height with two peaks
+	c = 0.01
+	h = .5 + .5*np.exp(-(2.*(x/XMAX-.6))**2/(2.*c**2))
+	h += np.exp(-(2.*(x/XMAX-.4))**2/(2.*c**2))
+	# momentum is zero
+	hu = 0.*x
+	return h, hu
 
-def addGhostCells(var):
-    return np.hstack([0.,var,0.])
+def addGhostCells(var):	
+	return np.hstack([0.,var,0.])
 
 def neumannBoundaryConditions(var):
-    return #???# var with neumann boundary conditions
+	var[0] = var[1]
+	var[-1] = var[-2]
+	return var #???# var with neumann boundary conditions
 
 def periodicBoundaryConditions(var):
-    return #???# var with periodic boundary conditions
+	var[0] = var[-2]
+	var[-1] = var[1] 
+	return var #???# var with periodic boundary conditions
 
 def calculateDt(dx,maxeig,tsum,TMAX):
-    return #???# stepsize dtdt
+	r = dx/maxeig
+	dt = CFL*r
+	if tsum + dt > TMAX:
+		dt = TMAX - tsum
+	
+	return dt #???# stepsize dtdt
 
 def fluxes(h,hu):
-    fh,fhu,lambd1,lambd2 = fluxAndLambda(h,hu)
-    maxeig = #???# calculate largest eigenvalue
-    return fh, fhu, maxeig
+	fh,fhu,lambd1,lambd2 = fluxAndLambda(h,hu)
+	#maxeig = np.amax(np.maximum(lambd1, lambd2)) #???# calculate largest eigenvalue
+	maxeig = np.amax(np.maximum(np.abs(lambd1),np.abs(lambd2))) #???# calculate largest eigenvalue #FASIT
+	return fh, fhu, maxeig
 
 def LxFflux(q, fqm, fqp, lambd):
-    return #???# Lax-Friedrichs Flux
+	#R = 0.5*(fqm+fqp) - 0.5/lambd*(q[1:]-q[:-1])
+	R = 0.5*( (fqp+fqm) - 1./lambd*(q[1:] - q[:-1]) ) #FASIT
+	return R #???# Lax-Friedrichs Flux
 
 def fluxAndLambda(h,hu):
-    return #???# fluxes fh and fhu and eigenvalues lambda1, lambda2
+	c = np.sqrt(g*h)
+	h = np.maximum(0.5,h) #FASIT
+	u = hu/h
+	
+	fh = hu
+	fhu = hu*u + 0.5*g*h*h
+	
+	#c = np.sqrt(g*h)
+	
+	lambda1 = u + c
+	lambda2 = u - c
+	
+	return fh, fhu, lambda1, lambda2 #???# fluxes fh and fhu and eigenvalues lambda1, lambda2
 
 if __name__ == "__main__":
 
-    from optparse import OptionParser
-    usage = "usage: %prog [var=value]"
-    p = OptionParser(usage)
-    p.add_option("--n", type="int", help="number of points")
-    p.add_option("--XMAX", type="float", help="length of domain")
-    p.add_option("--TMAX", type="float", help="time of simulation")
-    (opts, args) = p.parse_args()
-    if opts.n == None:
-        n = 100
-    else:
-        n = opts.n
-    if opts.XMAX == None:
-        XMAX = 1.0
-    else:
-        XMAX = opts.XMAX
-    if opts.TMAX == None:
-        TMAX = .02
-    else:
-        TMAX = opts.TMAX
+	from optparse import OptionParser
+	usage = "usage: %prog [var=value]"
+	p = OptionParser(usage)
+	p.add_option("--n", type="int", help="number of points")
+	p.add_option("--XMAX", type="float", help="length of domain")
+	p.add_option("--TMAX", type="float", help="time of simulation")
+	(opts, args) = p.parse_args()
+	if opts.n == None:
+		n = 1000 #1000
+	else:
+		n = opts.n
+	if opts.XMAX == None:
+		XMAX = 1.0
+	else:
+		XMAX = opts.XMAX
+	if opts.TMAX == None:
+		TMAX = 0.045 #0.045
+	else:
+		TMAX = opts.TMAX
 
-    shallowWater(n,XMAX,TMAX)
+	shallowWater(n,XMAX,TMAX)
 
